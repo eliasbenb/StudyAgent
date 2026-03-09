@@ -118,6 +118,8 @@ export LLM_MODEL=<a model that supports completions>
 export EMBED_API_KEY=<YOUR KEY>
 export EMBED_MODEL=<a text embedding model>
 export EMBED_URL="<URL BASE>/v1/embeddings"
+export PHENOTYPE_INDEX_DIR="<ABSOLUTE PATH TO phenotype_index>"
+export STUDY_AGENT_MCP_CWD="<REPO ROOT (optional, for stable relative paths)>"
 export STUDY_AGENT_HOST=127.0.0.1
 export STUDY_AGENT_PORT=8765
 export STUDY_AGENT_MCP_COMMAND=study-agent-mcp
@@ -126,6 +128,8 @@ study-agent-acp
 ```
 Note: Prefer stopping the ACP process (SIGINT/SIGTERM) so the MCP subprocess is closed cleanly. Killing the MCP directly can leave defunct processes.
 Note: ACP uses a threaded HTTP server by default. Set `STUDY_AGENT_THREADING=0` to disable threading.
+Note: `/health` includes MCP preflight details under `mcp_index` when MCP is configured.
+Troubleshooting: run `python mcp_server/scripts/mcp_probe.py` to verify index paths and search without ACP.
 
 2. Run `phenotype_recommendation`
 ```bash

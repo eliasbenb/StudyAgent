@@ -152,6 +152,18 @@ class StudyAgent:
             }
 
         full = search_result.get("full_result") or {}
+        if full.get("error"):
+            payload = {
+                "status": "error",
+                "error": full.get("error"),
+                "details": full,
+            }
+            if full.get("error") == "phenotype_index_unavailable":
+                payload["hint"] = (
+                    "Set PHENOTYPE_INDEX_DIR to the phenotype_index directory "
+                    "(prefer an absolute path) and verify catalog.jsonl exists."
+                )
+            return payload
         if "results" not in full and full.get("content"):
             return {
                 "status": "error",

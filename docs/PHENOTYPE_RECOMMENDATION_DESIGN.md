@@ -36,7 +36,7 @@ Each phenotype is stored as a compact JSON document (one line per document):
 9. `source_meta`
 
 **Index Directory Layout**
-Default root is `PHENOTYPE_INDEX_DIR` or `data/phenotype_index`.
+Default root is `PHENOTYPE_INDEX_DIR` or repo-relative `data/phenotype_index` (resolved from the MCP package location).
 1. `catalog.jsonl` (compact phenotype docs)
 2. `sparse_index.pkl` (pure-Python BM25-style index)
 3. `dense.index` (FAISS index)
@@ -70,6 +70,7 @@ Default root is `PHENOTYPE_INDEX_DIR` or `data/phenotype_index`.
 3. `phenotype_fetch_definition(cohortId, truncate=true)`
 4. `phenotype_list_similar(cohortId, top_k=10)`
 5. `phenotype_prompt_bundle(task)` (returns overview/spec/output_schema)
+6. `phenotype_index_status()` (returns index path + file existence for preflight checks)
 
 **ACP Orchestration**
 1. User submits study intent to ACP.
@@ -118,6 +119,8 @@ Candidate selection:
 17. `STUDY_AGENT_THREADING` (default `1`) uses a threaded HTTP server for ACP. Set to `0` to disable.
 18. `STUDY_AGENT_HOST` (default `127.0.0.1`)
 19. `STUDY_AGENT_PORT` (default `8765`)
+20. `STUDY_AGENT_MCP_CWD` (optional) working directory passed to MCP subprocesses. Use for stable relative paths.
+21. `MCP_LOG_LEVEL` (default `INFO`) controls MCP stderr logging (`DEBUG|INFO|WARN|ERROR|OFF`).
 
 **Risks and Mitigations**
 1. Missing dependencies for FAISS

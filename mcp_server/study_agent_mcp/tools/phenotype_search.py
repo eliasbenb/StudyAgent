@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, Optional
 
-from study_agent_mcp.retrieval import get_default_index
+from study_agent_mcp.retrieval import get_default_index, index_status
 
 from ._common import with_meta
 
@@ -25,16 +25,35 @@ def register(mcp: object) -> None:
             dense_weight = default_dense_weight
         if sparse_weight is None:
             sparse_weight = default_sparse_weight
-        index = get_default_index()
-        results = index.search(
-            query=query,
-            top_k=top_k,
-            offset=offset,
-            dense_k=dense_k,
-            sparse_k=sparse_k,
-            dense_weight=dense_weight,
-            sparse_weight=sparse_weight,
-        )
+        try:
+            index = get_default_index()
+        except Exception as exc:
+            return with_meta(
+                {
+                    "error": "phenotype_index_unavailable",
+                    "details": str(exc),
+                    "index_status": index_status(),
+                },
+                "phenotype_search",
+            )
+        try:
+            results = index.search(
+                query=query,
+                top_k=top_k,
+                offset=offset,
+                dense_k=dense_k,
+                sparse_k=sparse_k,
+                dense_weight=dense_weight,
+                sparse_weight=sparse_weight,
+            )
+        except Exception as exc:
+            return with_meta(
+                {
+                    "error": "phenotype_search_failed",
+                    "details": str(exc),
+                },
+                "phenotype_search",
+            )
         payload = {
             "query": query,
             "results": results,

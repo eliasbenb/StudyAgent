@@ -86,6 +86,11 @@ class ACPRequestHandler(BaseHTTPRequestHandler):
             payload = {"status": "ok"}
             if self.mcp_client is not None:
                 payload["mcp"] = self.mcp_client.health_check()
+                if payload["mcp"].get("ok"):
+                    try:
+                        payload["mcp_index"] = self.mcp_client.call_tool("phenotype_index_status", {})
+                    except Exception as exc:
+                        payload["mcp_index"] = {"error": str(exc)}
             _write_json(self, 200, payload)
             return
         if self.path == "/tools":
@@ -377,11 +382,12 @@ def _build_agent(
     mcp_command: Optional[str],
     mcp_args: Optional[list[str]],
     allow_core_fallback: bool,
+    mcp_cwd: Optional[str],
 ) -> tuple[StudyAgent, Optional[StdioMCPClient]]:
     mcp_client = None
     if mcp_command:
         mcp_client = StdioMCPClient(
-            StdioMCPClientConfig(command=mcp_command, args=mcp_args or []),
+            StdioMCPClientConfig(command=mcp_command, args=mcp_args or [], cwd=mcp_cwd),
         )
     return StudyAgent(mcp_client=mcp_client, allow_core_fallback=allow_core_fallback), mcp_client
 
@@ -450,9 +456,19 @@ def main(host: str = "127.0.0.1", port: int = 8765) -> None:
     allow_core_fallback = os.getenv("STUDY_AGENT_ALLOW_CORE_FALLBACK", "1") == "1"
     debug = os.getenv("STUDY_AGENT_DEBUG", "0") == "1"
     threaded = os.getenv("STUDY_AGENT_THREADING", "1") == "1"
+    mcp_cwd = os.getenv("STUDY_AGENT_MCP_CWD") or os.getcwd()
+
+    if mcp_command:
+        if os.getenv("PHENOTYPE_INDEX_DIR") is None:
+            print("ACP WARN > PHENOTYPE_INDEX_DIR not set; MCP will use its default.")
+        if os.getenv("EMBED_URL") is None:
+            print("ACP WARN > EMBED_URL not set; MCP will use its default.")
+        if os.getenv("EMBED_MODEL") is None:
+            print("ACP WARN > EMBED_MODEL not set; MCP will use its default.")
+        print(f"ACP INFO > MCP cwd={mcp_cwd}")
 
     args_list = [arg for arg in mcp_args.split(" ") if arg]
-    agent, mcp_client = _build_agent(mcp_command, args_list, allow_core_fallback)
+    agent, mcp_client = _build_agent(mcp_command, args_list, allow_core_fallback, mcp_cwd)
 
     class Handler(ACPRequestHandler):
         agent = None

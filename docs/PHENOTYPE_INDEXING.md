@@ -31,4 +31,5 @@ The output directory will contain:
 **Notes**
 1. If FAISS/numpy are not installed, omit `--build-dense` or install them first.
 2. Indexing is safe to run repeatedly; it rebuilds the directory contents.
-3. Set `PHENOTYPE_INDEX_DIR` in your MCP environment to point at the output directory.
+3. Set `PHENOTYPE_INDEX_DIR` in your MCP environment to point at the output directory (prefer an absolute path).
+4. If `PHENOTYPE_INDEX_DIR` is not set, MCP falls back to the repo-relative default `data/phenotype_index`.

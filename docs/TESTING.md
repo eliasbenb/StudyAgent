@@ -152,6 +152,14 @@ Start ACP with an MCP tool server:
 STUDY_AGENT_MCP_COMMAND=study-agent-mcp STUDY_AGENT_MCP_ARGS="" study-agent-acp
 ```
 
+Recommended MCP environment (use absolute paths for stability):
+
+```bash
+export PHENOTYPE_INDEX_DIR="/absolute/path/to/phenotype_index"
+export EMBED_URL="http://localhost:3000/ollama/api/embed"
+export EMBED_MODEL="qwen3-embedding:4b"
+```
+
 Optional host/port override:
 
 ```bash
@@ -159,6 +167,12 @@ STUDY_AGENT_HOST=0.0.0.0 STUDY_AGENT_PORT=9000 study-agent-acp
 ```
 
 Then run the same curl commands as above.
+
+Health check now includes MCP index preflight details under `mcp_index`:
+
+```bash
+curl -s http://127.0.0.1:8765/health
+```
 
 ## ACP phenotype flow (MCP + LLM)
 
@@ -289,16 +303,36 @@ doit smoke_phenotype_validation_review_flow
 
 ## MCP smoke test (import)
 
+```bash
+python -c "import study_agent_mcp; print('mcp import ok')"
+```
+
+## MCP probe (index + search)
+
+This checks index paths and runs a simple search, without ACP.
+
+```bash
+python mcp_server/scripts/mcp_probe.py --query "acute GI bleed in hospitalized patients" --top-k 5
+```
+
+PowerShell (Windows) equivalent:
+
+```powershell
+python mcp_server/scripts/mcp_probe.py --query "acute GI bleed in hospitalized patients" --top-k 5
+```
+
+Print and sort environment variables (PowerShell):
+
+```powershell
+Get-ChildItem Env: | Sort-Object Name
+```
+
 ## Service listing
 
 Use the `/services` endpoint (or the helper task) to list ACP services:
 
 ```bash
 doit list_services
-```
-
-```bash
-python -c "import study_agent_mcp; print('mcp import ok')"
 ```
 
 ## Stop server

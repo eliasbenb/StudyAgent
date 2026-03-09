@@ -287,13 +287,50 @@ class PhenotypeIndex:
 _DEFAULT_INDEX: Optional[PhenotypeIndex] = None
 
 
+def _default_index_dir() -> tuple[str, str]:
+    env_dir = os.getenv("PHENOTYPE_INDEX_DIR")
+    if env_dir:
+        return os.path.abspath(env_dir), "env"
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+    return os.path.join(repo_root, "data", "phenotype_index"), "default"
+
+
+def index_status(index_dir: Optional[str] = None) -> Dict[str, Any]:
+    resolved_dir, source = _default_index_dir()
+    if index_dir:
+        resolved_dir = os.path.abspath(index_dir)
+        source = "explicit"
+    paths = _index_paths(resolved_dir)
+    files = {}
+    for key, path in paths.items():
+        exists = os.path.exists(path)
+        size = None
+        if exists and os.path.isfile(path):
+            try:
+                size = os.path.getsize(path)
+            except OSError:
+                size = None
+        files[key] = {"path": path, "exists": exists, "size": size}
+    return {
+        "index_dir": resolved_dir,
+        "index_dir_source": source,
+        "exists": os.path.isdir(resolved_dir),
+        "files": files,
+    }
+
+
 def get_default_index() -> PhenotypeIndex:
     global _DEFAULT_INDEX
     if _DEFAULT_INDEX is None:
-        index_dir = os.getenv("PHENOTYPE_INDEX_DIR", "data/phenotype_index")
+        status = index_status()
+        if not status["exists"]:
+            raise RuntimeError(f"Phenotype index directory not found: {status['index_dir']}")
+        catalog_info = status["files"].get("catalog") or {}
+        if not catalog_info.get("exists"):
+            raise RuntimeError(f"Phenotype catalog not found: {catalog_info.get('path')}")
         embed_url = os.getenv("EMBED_URL", "http://localhost:3000/ollama/api/embed")
         embed_model = os.getenv("EMBED_MODEL", "qwen3-embedding:4b")
         api_key = os.getenv("EMBED_API_KEY")
         embedding_client = EmbeddingClient(url=embed_url, model=embed_model, api_key=api_key)
-        _DEFAULT_INDEX = PhenotypeIndex(index_dir=index_dir, embedding_client=embedding_client).load()
+        _DEFAULT_INDEX = PhenotypeIndex(index_dir=status["index_dir"], embedding_client=embedding_client).load()
     return _DEFAULT_INDEX
