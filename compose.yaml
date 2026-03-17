@@ -1,0 +1,28 @@
+name: study-agent
+
+services:
+  mcp-server:
+    build:
+      context: .
+    image: study-agent
+    env_file:
+      - .env
+    ports:
+      - 8790:8790
+    volumes:
+      - ./data/phenotype_index:/data/phenotype_index
+    command: ["micromamba", "run", "-n", "base", "study-agent-mcp"]
+    restart: unless-stopped
+
+  acp-agent:
+    image: study-agent
+    env_file:
+      - .env
+    environment:
+      STUDY_AGENT_MCP_URL: http://mcp-server:8790/mcp
+    ports:
+      - 8765:8765
+    depends_on: 
+      - mcp-server
+    command: ["micromamba", "run", "-n", "base", "study-agent-acp"]
+    restart: unless-stopped
