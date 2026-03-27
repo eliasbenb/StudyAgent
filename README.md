@@ -178,6 +178,35 @@ curl -s -X POST http://127.0.0.1:8765/flows/phenotype_recommendation \
   -d '{"study_intent":"Identify clinical risk factors for older adult patients who experience an adverse event of acute gastro-intenstinal (GI) bleeding", "top_k":20, "max_results":10,"candidate_limit":10}'
 ```
 
+### Docker quickstart
+
+Use Docker compose to run MCP and ACP together with MCP over HTTP.
+
+1. Prepare environment variables:
+
+```bash
+cp .env.example .env
+# Fill in .env with at least:
+# LLM_API_URL, LLM_API_KEY, LLM_MODEL
+```
+
+2. Build and start both services:
+
+```bash
+docker compose up --build -d
+```
+
+3. Check service health and tool listing:
+
+```bash
+curl -sS http://127.0.0.1:8765/health
+curl -sS http://127.0.0.1:8765/tools
+```
+
+Notes:
+- ACP is exposed on port 8765 and MCP on port 8790.
+- The phenotype index is mounted from ./data/phenotype_index into MCP at /data/phenotype_index.
+
 ## Planned Services
 
 Below is a set of planned study agent services, organized by category. For each service, document the input, output, and validation approach.
