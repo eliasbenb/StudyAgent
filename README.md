@@ -18,7 +18,7 @@ Here are some ways:
 
 - `data_quality_interpretation` : study agent provides interpretation from Data Quality Dashboard, Achilles Heel data quality checks, and Achilles data source characterizations over one or more sources that a user intends to use within a study.  In this mode, the study agent derive insights from those sources based on the user's study intent.  This is important because it will make the information in the characterizations and QC reports more relevant and actionable to users than static and broad-scope reports (current state). Users will use this tool from R initially.
 
-- `create_new_phenotype_definition` : Study agent will guide the user through the creation of a definition for an EHR phenotype for the target or outcome cohort relevant to their study intent. This workflow involves selection of concepts, organization of concepts into concept sets, and organization into cohort definition logic. Users will use this tool from R or Atlas initially.
+- `create_new_phenotype_definition` : Study agent will guide the user through the creation of a definition for an EHR phenotype for the target or outcome cohort relevant to their study intent. This workflow involves selection of concepts, organization of concepts into concept sets, and assembly into cohort definition logic. In addition to concept retrieval, the agent will support reasoning over the semantic relationships encoded in the OMOP vocabulary system (via identity, hierarchical, compositional, associative and attribute links) to help users identify appropriate inclusions, exclusions, and boundary conditions. This enables deterministic validation of constructed concept sets, supports principled disambiguation of similar concepts during grounding, and provides traceable justification for why specific concepts or groups are included in a phenotype definition. Users will use this tool from R or Atlas initially.
   
 - `keeper_design_sample` : Study agent helps the user to create the createKeeper function to pull cases matching a clinical definition. This will guide the user through building the set of symptoms, related differential diagnoses (those that need to be ruled out), diagnostic procedures, complications, exposures, and measurements for the clinical definition. 
 
@@ -204,6 +204,16 @@ Below is a set of planned study agent services, organized by category. For each 
 **Output:** Directed acyclic graph of known causal/associative relations (LLM + literature discovery).  
 **Validation:** Consistency with cited relations and domain plausibility.
 
+#### `explain_cohort_diagnostics`
+**Input:** The user's study intent statement and cohort diagnostics output including code to run and the results files  
+**Output:** narrative summary / report of the analysis.  
+**Validation:** Correctly reported summary of the methods and results.
+
+#### `explain_incidence/estimation/characterization_results`
+**Input:** The user's study intent statement and cohort diagnostics and a completed analysis with strategus output folders with code to run and the results files (incidence/estimation/characterization).  
+**Output:** narrative summary / report of the analysis.  
+**Validation:** Correctly reported summary of the methods and results.
+
 ### High Level Operational
 
 #### `strategus_*`
@@ -266,9 +276,9 @@ Below is a set of planned study agent services, organized by category. For each 
 **Validation:** Reproducible execution outputs; summary tied to diagnostics.
 
 #### `phenotype_validation_review`
-**Input:** Selected phenotype definition(s).  
-**Output:** Code to sample cases for validation and compare to known phenotype performance.  
-**Validation:** Sampling logic review; user confirmation before running.
+**Input:** Selected phenotype definition (usually for an outcome cohort) and a narrative clinical description with differential diagnoses and known associated factors for validation and to compare to known phenotype performance.  
+**Output:** code to extract sample cases based on the clinical description and LLM-assessment of a sample (user-specified or random) of cohort records stripped of PHI. 
+**Validation:** Sampling logic review; user confirmation.
 
 #### `cohort_definition_build`
 **Input:** Phenotype/covariate intent without a cohort definition.  
