@@ -53,6 +53,60 @@ def test_mcp_health_check_success():
     assert client.health_check() == {"ok": True}
 
 
+@pytest.mark.acp
+def test_resolve_mcp_url_from_env(monkeypatch):
+    monkeypatch.delenv("STUDY_AGENT_MCP_URL", raising=False)
+    monkeypatch.setenv("MCP_TRANSPORT", "http")
+    monkeypatch.setenv("MCP_HOST", "127.0.0.1")
+    monkeypatch.setenv("MCP_PORT", "8790")
+    monkeypatch.setenv("MCP_PATH", "/mcp")
+
+    assert acp_server._resolve_mcp_url_from_env() == "http://127.0.0.1:8790/mcp"
+
+
+@pytest.mark.acp
+def test_resolve_mcp_url_from_env_prefers_explicit(monkeypatch):
+    monkeypatch.setenv("STUDY_AGENT_MCP_URL", "http://example.test:9999/custom")
+    monkeypatch.setenv("MCP_TRANSPORT", "http")
+    monkeypatch.setenv("MCP_HOST", "127.0.0.1")
+    monkeypatch.setenv("MCP_PORT", "8790")
+    monkeypatch.setenv("MCP_PATH", "/mcp")
+
+    assert acp_server._resolve_mcp_url_from_env() == "http://example.test:9999/custom"
+
+
+@pytest.mark.acp
+def test_health_reports_mcp_not_configured():
+    handler = acp_server.ACPRequestHandler.__new__(acp_server.ACPRequestHandler)
+    handler.path = "/health"
+    handler.headers = {}
+    handler.debug = False
+    handler.agent = StudyAgent(mcp_client=None)
+    handler.mcp_client = None
+    handler.wfile = None
+    handler.rfile = None
+
+    captured = {}
+
+    def fake_write_json(_handler, status, payload):
+        captured["status"] = status
+        captured["payload"] = payload
+
+    original = acp_server._write_json
+    acp_server._write_json = fake_write_json
+    try:
+        handler.do_GET()
+    finally:
+        acp_server._write_json = original
+
+    assert captured["status"] == 200
+    assert captured["payload"] == {
+        "status": "ok",
+        "mcp": {"ok": False, "configured": False, "error": "mcp_not_configured"},
+        "mcp_index": {"skipped": True, "reason": "mcp_not_configured"},
+    }
+
+
 class StubMCPClient:
     def __init__(self) -> None:
         self.calls = []
@@ -85,6 +139,127 @@ class StubMCPClient:
             return {"prompt": "main"}
         if name == "keeper_parse_response":
             return {"label": "yes", "rationale": "ok"}
+        if name == "keeper_concept_set_bundle":
+            if arguments.get("domain_key"):
+                domain_key = arguments["domain_key"]
+                return {
+                    "task": "keeper_concept_sets_generate",
+                    "overview": "overview",
+                    "domain": {
+                        "parameterName": domain_key,
+                        "domains": ["Condition"],
+                        "conceptClasses": [],
+                    },
+                    "spec_generate_terms": "spec terms",
+                    "spec_filter_concepts": "spec filter",
+                    "output_schema_generate_terms": {"type": "object"},
+                    "output_schema_filter_concepts": {"type": "object"},
+                    "term_generation_prompt": f"generate {domain_key}",
+                    "concept_filter_prompt": f"filter {domain_key}",
+                }
+            return {
+                "task": "keeper_concept_sets_generate",
+                "domains": [
+                    {"parameterName": "doi"},
+                    {"parameterName": "alternativeDiagnosis"},
+                    {"parameterName": "symptoms"},
+                ],
+            }
+        if name == "keeper_profile_extract":
+            return {
+                "profile_records": [
+                    {
+                        "generatedId": "1",
+                        "category": "phenotype",
+                        "conceptName": "GI bleed",
+                        "startDay": 0,
+                        "endDay": 0,
+                        "target": "Other",
+                        "extraData": "",
+                    },
+                    {
+                        "generatedId": "1",
+                        "category": "age",
+                        "conceptName": "44",
+                        "startDay": 0,
+                        "endDay": 0,
+                        "target": "Disease of interest",
+                        "extraData": "",
+                    },
+                ],
+                "record_count": 2,
+                "sample_size_requested": 2,
+                "sample_size_returned": 1,
+                "sampling_mode": "ordered_head",
+            }
+        if name == "keeper_profile_to_rows":
+            return {
+                "rows": [
+                    {
+                        "generatedId": "1",
+                        "phenotype": "GI bleed",
+                        "age": "44",
+                        "gender": "Male",
+                        "presentation": "",
+                    }
+                ],
+                "row_count": 1,
+            }
+        if name == "vocab_search_standard":
+            term = arguments["query"]
+            if "Mallory" in term:
+                return {
+                    "error": "vocab_search_provider_unconfigured",
+                    "concepts": [],
+                    "count": 0,
+                }
+            if "Gastrointestinal bleeding" in term or "hemorrhage" in term:
+                return {
+                    "concepts": [
+                        {
+                            "conceptId": 100,
+                            "conceptName": "Gastrointestinal hemorrhage",
+                            "vocabularyId": "SNOMED",
+                            "domainId": "Condition",
+                            "conceptClassId": "Clinical Finding",
+                            "standardConcept": "S",
+                            "recordCount": 50000,
+                        }
+                    ],
+                    "count": 1,
+                }
+            if "abdominal pain" in term:
+                return {
+                    "concepts": [
+                        {
+                            "conceptId": 200,
+                            "conceptName": "Abdominal pain",
+                            "vocabularyId": "SNOMED",
+                            "domainId": "Condition",
+                            "conceptClassId": "Clinical Finding",
+                            "standardConcept": "S",
+                            "recordCount": 75000,
+                        }
+                    ],
+                    "count": 1,
+                }
+            return {"concepts": [], "count": 0}
+        if name == "vocab_filter_standard_concepts":
+            return {"concepts": arguments.get("concepts", []), "count": len(arguments.get("concepts", []))}
+        if name == "vocab_fetch_concepts":
+            concepts = arguments.get("concepts", [])
+            selected = set(arguments.get("concept_ids", []))
+            return {
+                "concepts": [concept for concept in concepts if concept.get("conceptId") in selected],
+                "count": len([concept for concept in concepts if concept.get("conceptId") in selected]),
+            }
+        if name == "vocab_remove_descendants":
+            return {"concepts": arguments.get("concepts", []), "count": len(arguments.get("concepts", []))}
+        if name == "phoebe_related_concepts":
+            return {"error": "phoebe_provider_unconfigured", "concepts": [], "count": 0}
+        if name == "vocab_add_nonchildren":
+            concepts = list(arguments.get("concepts", [])) + list(arguments.get("new_concepts", []))
+            return {"concepts": concepts, "count": len(concepts)}
         if name == "propose_concept_set_diff":
             return {"plan": "ok", "findings": [], "patches": [], "actions": [], "risk_notes": []}
         if name == "cohort_lint":
@@ -157,6 +332,134 @@ def test_flow_phenotype_validation_review(monkeypatch):
     )
     assert result["status"] == "ok"
     assert result["full_result"]["label"] == "yes"
+
+
+@pytest.mark.acp
+def test_flow_keeper_concept_sets_generate(monkeypatch):
+    import study_agent_acp.agent as agent_module
+
+    calls = {"count": 0}
+
+    def fake_llm(prompt, required_keys=None):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return {"terms": ["Gastrointestinal bleeding", "hemorrhage"]}
+        if calls["count"] == 2:
+            return {"conceptId": [100]}
+        if calls["count"] == 3:
+            return {"conceptId": [100]}
+        if calls["count"] == 4:
+            return {"terms": ["Mallory-Weiss tear", "Peptic ulcer disease"]}
+        if calls["count"] == 5:
+            return {"conceptId": []}
+        if calls["count"] == 6:
+            return {"conceptId": []}
+        if calls["count"] == 7:
+            return {"terms": ["abdominal pain"]}
+        if calls["count"] == 8:
+            return {"conceptId": [200]}
+        if calls["count"] == 9:
+            return {"conceptId": [200]}
+        if required_keys == ["terms"]:
+            return {"terms": []}
+        return {"conceptId": []}
+
+    monkeypatch.setattr(agent_module, "call_llm", fake_llm)
+    agent = StudyAgent(mcp_client=StubMCPClient())
+    result = agent.run_keeper_concept_sets_generate_flow(
+        phenotype="Gastrointestinal bleeding",
+        include_diagnostics=True,
+    )
+    assert result["status"] == "ok"
+    assert result["phenotype"] == "Gastrointestinal bleeding"
+    assert len(result["concept_sets"]) == 2
+    assert {item["conceptSetName"] for item in result["concept_sets"]} == {"doi", "symptoms"}
+    assert any(domain["domain_key"] == "alternativeDiagnosis" for domain in result["domains"])
+    assert result["diagnostics"]["domain_runs"][0]["domain_key"] == "doi"
+
+
+@pytest.mark.acp
+def test_flow_keeper_concept_sets_generate_salvages_concepts_array_schema(monkeypatch):
+    import study_agent_acp.agent as agent_module
+
+    calls = {"count": 0}
+
+    def fake_llm(prompt, required_keys=None):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return {"terms": ["Gastrointestinal bleeding", "hemorrhage"]}
+        if calls["count"] == 2:
+            return {
+                "concepts": [
+                    {"concept_id": 100, "concept_name": "Gastrointestinal hemorrhage"},
+                ]
+            }
+        if calls["count"] == 3:
+            return {
+                "concepts": [
+                    {"concept_id": 100, "concept_name": "Gastrointestinal hemorrhage"},
+                ]
+            }
+        return {"conceptId": []}
+
+    monkeypatch.setattr(agent_module, "call_llm", fake_llm)
+    agent = StudyAgent(mcp_client=StubMCPClient())
+    result = agent.run_keeper_concept_sets_generate_flow(
+        phenotype="Gastrointestinal bleeding",
+        domain_keys=["doi"],
+        include_diagnostics=True,
+    )
+    assert result["status"] == "ok"
+    assert len(result["concept_sets"]) == 1
+    assert result["concept_sets"][0]["conceptId"] == 100
+    run = result["diagnostics"]["domain_runs"][0]
+    assert run["llm_filter_initial_salvage_mode"] == "concepts_array"
+    assert run["llm_filter_final_salvage_mode"] == "concepts_array"
+
+
+@pytest.mark.acp
+def test_flow_keeper_profiles_generate():
+    agent = StudyAgent(mcp_client=StubMCPClient())
+    result = agent.run_keeper_profiles_generate_flow(
+        cohort_database_schema="results",
+        cohort_table="cohort",
+        cohort_definition_id=123,
+        cdm_database_schema="cdm",
+        keeper_concept_sets=[{"conceptId": 100, "conceptName": "GI bleed", "vocabularyId": "SNOMED", "conceptSetName": "doi", "target": "Disease of interest"}],
+        sample_size=2,
+        phenotype_name="GI bleed",
+        remove_pii=True,
+    )
+    assert result["status"] == "ok"
+    assert result["row_count"] == 1
+    assert result["sample_size_requested"] == 2
+    assert result["sample_size_returned"] == 1
+
+
+@pytest.mark.acp
+def test_extract_keeper_concept_ids_handles_scalar_and_top_level_array():
+    from study_agent_acp.agent import StudyAgent
+    from study_agent_acp.llm_client import LLMCallResult
+
+    agent = StudyAgent(mcp_client=StubMCPClient())
+
+    scalar_ids, scalar_mode = agent._extract_keeper_concept_ids(
+        LLMCallResult(status="ok", parsed_content={"conceptId": "439847"})
+    )
+    assert scalar_ids == [439847]
+    assert scalar_mode == "scalar_conceptId"
+
+    array_ids, array_mode = agent._extract_keeper_concept_ids(
+        LLMCallResult(
+            status="ok",
+            parsed_content=[
+                {"conceptId": "42872434"},
+                {"concept_id": "439847"},
+            ],
+        )
+    )
+    assert array_ids == [42872434, 439847]
+    assert array_mode == "top_level_array"
 
 
 @pytest.mark.acp

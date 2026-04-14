@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import socket
@@ -14,6 +15,7 @@ from study_agent_core.net import rewrite_container_host_url
 
 _JSON_FENCE_RE = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.IGNORECASE | re.MULTILINE)
 _REASONING_PREFIX_RE = re.compile(r"^\s*(?:<[^>]+>\s*)+", re.DOTALL)
+logger = logging.getLogger("study_agent.acp.llm")
 
 
 @dataclass
@@ -234,6 +236,37 @@ def build_keeper_prompt(
     return "\n\n".join([s for s in sections if s])
 
 
+def build_keeper_concept_set_prompt(
+    overview: str,
+    spec: str,
+    output_schema: Dict[str, Any],
+    system_prompt: str,
+    payload: Dict[str, Any],
+    max_kb: int = 10,
+) -> str:
+    strict_rules = "\n\n".join(
+        [
+            "STRICT OUTPUT RULES:",
+            spec,
+            "Return exactly ONE JSON object that matches the output schema.",
+            "Do NOT wrap output in markdown, code fences, or prose.",
+            "If uncertain, return required keys with empty arrays.",
+            f"Keep output under {max_kb} KB.",
+        ]
+    )
+    sections = [
+        overview,
+        "SYSTEM PROMPT:",
+        system_prompt,
+        "OUTPUT SCHEMA (JSON):",
+        json.dumps(output_schema, ensure_ascii=True),
+        "DYNAMIC INPUT (JSON):",
+        json.dumps(payload, ensure_ascii=True),
+        strict_rules,
+    ]
+    return "\n\n".join([s for s in sections if s])
+
+
 def _normalize_content_text(text: Optional[str]) -> str:
     normalized = str(text or "").strip()
     if not normalized:
@@ -326,7 +359,7 @@ def _extract_responses_output_text(data: Dict[str, Any]) -> Optional[str]:
 
 
 def _log_llm(message: str) -> None:
-    print(f"LLM {message}")
+    logger.info(message)
 
 
 def llm_result_payload(result: Optional[LLMCallResult]) -> Optional[Dict[str, Any]]:

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from urllib.parse import parse_qs, urlsplit
 from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from typing import Any, Dict, Optional
+
+from study_agent_core.logging_utils import configure_service_logger
 
 from .agent import StudyAgent
 from .mcp_client import HttpMCPClient, HttpMCPClientConfig, StdioMCPClient, StdioMCPClientConfig
@@ -15,10 +18,13 @@ SERVICES = [
     {"name": "concept_sets_review", "endpoint": "/flows/concept_sets_review"},
     {"name": "cohort_critique_general_design", "endpoint": "/flows/cohort_critique_general_design"},
     {"name": "phenotype_validation_review", "endpoint": "/flows/phenotype_validation_review"},
+    {"name": "keeper_concept_sets_generate", "endpoint": "/flows/keeper_concept_sets_generate"},
+    {"name": "keeper_profiles_generate", "endpoint": "/flows/keeper_profiles_generate"},
     {"name": "phenotype_recommendation_advice", "endpoint": "/flows/phenotype_recommendation_advice"},
     {"name": "phenotype_intent_split", "endpoint": "/flows/phenotype_intent_split"},
 ]
 SERVICE_REGISTRY_PATH = os.getenv("STUDY_AGENT_SERVICE_REGISTRY", "docs/SERVICE_REGISTRY.yaml")
+logger = logging.getLogger("study_agent.acp")
 
 
 def _sanitize_config_value(name: str, value: Optional[str]) -> Optional[str]:
@@ -46,17 +52,36 @@ def _log_startup_config() -> None:
     items = []
     for name in config_names:
         items.append(f"{name}={_sanitize_config_value(name, os.getenv(name))}")
-    print("ACP CONFIG > " + " ".join(items))
+    logger.info("config %s", " ".join(items))
 
 
 def _warn_on_inconsistent_llm_config() -> None:
     api_url = os.getenv("LLM_API_URL", "")
     use_responses = os.getenv("LLM_USE_RESPONSES", "0")
     if "/api/chat/completions" in api_url and use_responses == "1":
-        print(
-            "ACP WARN > LLM_API_URL targets /api/chat/completions while LLM_USE_RESPONSES=1. "
+        logger.warning(
+            "LLM_API_URL targets /api/chat/completions while LLM_USE_RESPONSES=1. "
             "Set LLM_USE_RESPONSES=0 for chat-completions compatibility."
         )
+
+
+def _resolve_mcp_url_from_env() -> Optional[str]:
+    explicit = os.getenv("STUDY_AGENT_MCP_URL")
+    if explicit:
+        return explicit
+
+    transport = (os.getenv("MCP_TRANSPORT") or "").strip().lower()
+    if transport != "http":
+        return None
+
+    host = (os.getenv("MCP_HOST") or "").strip()
+    port = (os.getenv("MCP_PORT") or "").strip()
+    path = (os.getenv("MCP_PATH") or "/mcp").strip() or "/mcp"
+    if not host or not port:
+        return None
+    if not path.startswith("/"):
+        path = f"/{path}"
+    return f"http://{host}:{port}{path}"
 
 
 def _read_json(handler: BaseHTTPRequestHandler) -> Dict[str, Any]:
@@ -79,7 +104,7 @@ def _write_json(handler: BaseHTTPRequestHandler, status: int, payload: Dict[str,
         handler.wfile.write(body)
     except BrokenPipeError:
         if getattr(handler, "debug", False):
-            print("ACP response write failed: client disconnected.")
+            logger.debug("response write failed: client disconnected")
 
 
 def _load_registry_services() -> tuple[list[Dict[str, Any]], list[str]]:
@@ -131,13 +156,14 @@ class ACPRequestHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *args: Any) -> None:
         if self.debug:
-            return super().log_message(format, *args)
+            logger.info("http %s", format % args)
+            return None
         return None
 
     def do_GET(self) -> None:
         if self.debug:
             content_type = self.headers.get("Content-Type")
-            print(f"ACP GET > path={self.path} content_type={content_type}")
+            logger.debug("GET path=%s content_type=%s", self.path, content_type)
 
         parsed = urlsplit(self.path)
 
@@ -160,6 +186,9 @@ class ACPRequestHandler(BaseHTTPRequestHandler):
                         )
                     except Exception as exc:
                         payload["mcp_index"] = {"error": str(exc)}
+            else:
+                payload["mcp"] = {"ok": False, "configured": False, "error": "mcp_not_configured"}
+                payload["mcp_index"] = {"skipped": True, "reason": "mcp_not_configured"}
 
             _write_json(self, 200, payload)
             return
@@ -192,7 +221,7 @@ class ACPRequestHandler(BaseHTTPRequestHandler):
         if self.debug:
             length = int(self.headers.get("Content-Length", "0"))
             content_type = self.headers.get("Content-Type")
-            print(f"ACP POST > path={self.path} length={length} content_type={content_type}")
+            logger.debug("POST path=%s length=%s content_type=%s", self.path, length, content_type)
         if self.path == "/tools/call":
             try:
                 body = _read_json(self)
@@ -211,9 +240,7 @@ class ACPRequestHandler(BaseHTTPRequestHandler):
                 result = self.agent.call_tool(name=name, arguments=arguments, confirm=confirm)
             except Exception as exc:
                 if self.debug:
-                    import traceback
-
-                    traceback.print_exc()
+                    logger.exception("tool_call_failed name=%s", name)
                 _write_json(self, 500, {"error": "tool_call_failed", "detail": str(exc) if self.debug else None})
                 return
             status = 200 if result.get("status") != "error" else 500
@@ -245,9 +272,7 @@ class ACPRequestHandler(BaseHTTPRequestHandler):
                 )
             except Exception as exc:
                 if self.debug:
-                    import traceback
-
-                    traceback.print_exc()
+                    logger.exception("flow_failed name=phenotype_recommendation")
                 _write_json(self, 500, {"error": "flow_failed", "detail": str(exc) if self.debug else None})
                 return
             status = 200 if result.get("status") != "error" else 500
@@ -293,9 +318,7 @@ class ACPRequestHandler(BaseHTTPRequestHandler):
                 )
             except Exception as exc:
                 if self.debug:
-                    import traceback
-
-                    traceback.print_exc()
+                    logger.exception("flow_failed name=phenotype_improvements")
                 _write_json(self, 500, {"error": "flow_failed", "detail": str(exc) if self.debug else None})
                 return
             status = 200 if result.get("status") != "error" else 500
@@ -325,9 +348,7 @@ class ACPRequestHandler(BaseHTTPRequestHandler):
                 )
             except Exception as exc:
                 if self.debug:
-                    import traceback
-
-                    traceback.print_exc()
+                    logger.exception("flow_failed name=concept_sets_review")
                 _write_json(self, 500, {"error": "flow_failed", "detail": str(exc) if self.debug else None})
                 return
             status = 200 if result.get("status") != "error" else 500
@@ -353,9 +374,7 @@ class ACPRequestHandler(BaseHTTPRequestHandler):
                 result = self.agent.run_cohort_critique_general_design_flow(cohort=cohort)
             except Exception as exc:
                 if self.debug:
-                    import traceback
-
-                    traceback.print_exc()
+                    logger.exception("flow_failed name=cohort_critique_general_design")
                 _write_json(self, 500, {"error": "flow_failed", "detail": str(exc) if self.debug else None})
                 return
             status = 200 if result.get("status") != "error" else 500
@@ -395,9 +414,67 @@ class ACPRequestHandler(BaseHTTPRequestHandler):
                 )
             except Exception as exc:
                 if self.debug:
-                    import traceback
+                    logger.exception("flow_failed name=phenotype_validation_review")
+                _write_json(self, 500, {"error": "flow_failed", "detail": str(exc) if self.debug else None})
+                return
+            status = 200 if result.get("status") != "error" else 500
+            _write_json(self, status, result)
+            return
 
-                    traceback.print_exc()
+        if self.path == "/flows/keeper_concept_sets_generate":
+            try:
+                body = _read_json(self)
+            except Exception as exc:
+                _write_json(self, 400, {"error": f"invalid_json: {exc}"})
+                return
+            phenotype = body.get("phenotype") or ""
+            domain_keys = body.get("domain_keys") or []
+            vocab_search_provider = body.get("vocab_search_provider") or ""
+            phoebe_provider = body.get("phoebe_provider") or ""
+            candidate_limit = int(body.get("candidate_limit", 50))
+            min_record_count = int(body.get("min_record_count", 0))
+            include_diagnostics = bool(body.get("include_diagnostics", True))
+            try:
+                result = self.agent.run_keeper_concept_sets_generate_flow(
+                    phenotype=phenotype,
+                    domain_keys=domain_keys,
+                    vocab_search_provider=vocab_search_provider,
+                    phoebe_provider=phoebe_provider,
+                    candidate_limit=candidate_limit,
+                    min_record_count=min_record_count,
+                    include_diagnostics=include_diagnostics,
+                )
+            except Exception as exc:
+                if self.debug:
+                    logger.exception("flow_failed name=keeper_concept_sets_generate")
+                _write_json(self, 500, {"error": "flow_failed", "detail": str(exc) if self.debug else None})
+                return
+            status = 200 if result.get("status") != "error" else 500
+            _write_json(self, status, result)
+            return
+
+        if self.path == "/flows/keeper_profiles_generate":
+            try:
+                body = _read_json(self)
+            except Exception as exc:
+                _write_json(self, 400, {"error": f"invalid_json: {exc}"})
+                return
+            try:
+                result = self.agent.run_keeper_profiles_generate_flow(
+                    cohort_database_schema=body.get("cohort_database_schema") or "",
+                    cohort_table=body.get("cohort_table") or "",
+                    cohort_definition_id=int(body.get("cohort_definition_id", 0)),
+                    cdm_database_schema=body.get("cdm_database_schema") or "",
+                    sample_size=int(body.get("sample_size", 20)),
+                    person_ids=body.get("person_ids") or [],
+                    keeper_concept_sets=body.get("keeper_concept_sets") or [],
+                    phenotype_name=body.get("phenotype_name") or "",
+                    use_descendants=bool(body.get("use_descendants", True)),
+                    remove_pii=bool(body.get("remove_pii", True)),
+                )
+            except Exception as exc:
+                if self.debug:
+                    logger.exception("flow_failed name=keeper_profiles_generate")
                 _write_json(self, 500, {"error": "flow_failed", "detail": str(exc) if self.debug else None})
                 return
             status = 200 if result.get("status") != "error" else 500
@@ -417,9 +494,7 @@ class ACPRequestHandler(BaseHTTPRequestHandler):
                 )
             except Exception as exc:
                 if self.debug:
-                    import traceback
-
-                    traceback.print_exc()
+                    logger.exception("flow_failed name=phenotype_recommendation_advice")
                 _write_json(self, 500, {"error": "flow_failed", "detail": str(exc) if self.debug else None})
                 return
             status = 200 if result.get("status") != "error" else 500
@@ -439,9 +514,7 @@ class ACPRequestHandler(BaseHTTPRequestHandler):
                 )
             except Exception as exc:
                 if self.debug:
-                    import traceback
-
-                    traceback.print_exc()
+                    logger.exception("flow_failed name=phenotype_intent_split")
                 _write_json(self, 500, {"error": "flow_failed", "detail": str(exc) if self.debug else None})
                 return
             status = 200 if result.get("status") != "error" else 500
@@ -527,6 +600,14 @@ def main(host: str = "127.0.0.1", port: int = 8765) -> None:
     import signal
     import threading
 
+    configure_service_logger(
+        "ACP",
+        "study_agent.acp",
+        default_level="INFO",
+        stream="stderr",
+        default_filename="study-agent-acp.log",
+    )
+
     host = os.getenv("STUDY_AGENT_HOST", host)
     port = int(os.getenv("STUDY_AGENT_PORT", str(port)))
     mcp_command = os.getenv("STUDY_AGENT_MCP_COMMAND")
@@ -535,7 +616,7 @@ def main(host: str = "127.0.0.1", port: int = 8765) -> None:
     debug = os.getenv("STUDY_AGENT_DEBUG", "0") == "1"
     threaded = os.getenv("STUDY_AGENT_THREADING", "1") == "1"
     mcp_cwd = os.getenv("STUDY_AGENT_MCP_CWD") or os.getcwd()
-    mcp_url = os.getenv("STUDY_AGENT_MCP_URL")
+    mcp_url = _resolve_mcp_url_from_env()
     mcp_token = os.getenv("STUDY_AGENT_MCP_TOKEN")
     mcp_timeout = int(os.getenv("STUDY_AGENT_MCP_TIMEOUT", "240"))
     _log_startup_config()
@@ -544,15 +625,15 @@ def main(host: str = "127.0.0.1", port: int = 8765) -> None:
     if mcp_url:
         if "://" in mcp_url and ":" not in mcp_url.split("://", 1)[1]:
             raise RuntimeError("STUDY_AGENT_MCP_URL missing port (e.g., http://127.0.0.1:8790/mcp).")
-        print(f"ACP INFO > MCP url={mcp_url}")
+        logger.info("MCP url=%s", mcp_url)
     elif mcp_command:
         if os.getenv("PHENOTYPE_INDEX_DIR") is None:
-            print("ACP WARN > PHENOTYPE_INDEX_DIR not set; MCP will use its default.")
+            logger.warning("PHENOTYPE_INDEX_DIR not set; MCP will use its default.")
         if os.getenv("EMBED_URL") is None:
-            print("ACP WARN > EMBED_URL not set; MCP will use its default.")
+            logger.warning("EMBED_URL not set; MCP will use its default.")
         if os.getenv("EMBED_MODEL") is None:
-            print("ACP WARN > EMBED_MODEL not set; MCP will use its default.")
-        print(f"ACP INFO > MCP cwd={mcp_cwd}")
+            logger.warning("EMBED_MODEL not set; MCP will use its default.")
+        logger.info("MCP cwd=%s", mcp_cwd)
 
     args_list = [arg for arg in mcp_args.split(" ") if arg]
     agent, mcp_client = _build_agent(
@@ -575,6 +656,7 @@ def main(host: str = "127.0.0.1", port: int = 8765) -> None:
     Handler.debug = debug
     server_cls = ThreadingHTTPServer if threaded else HTTPServer
     server = server_cls((host, port), Handler)
+    logger.info("ACP listening host=%s port=%s threaded=%s debug=%s", host, port, threaded, debug)
 
     shutdown_lock = threading.Lock()
     shutdown_once = {"done": False}
@@ -584,15 +666,15 @@ def main(host: str = "127.0.0.1", port: int = 8765) -> None:
             if shutdown_once["done"]:
                 return
             shutdown_once["done"] = True
-        if mcp_client is not None:
+        # HTTPServer.shutdown() must run from a different thread than serve_forever().
+        # We defer MCP cleanup to _serve() so signal handling stays responsive.
+        def _shutdown_server() -> None:
             try:
-                mcp_client.close()
+                server.shutdown()
             except Exception:
                 pass
-        try:
-            server.shutdown()
-        except Exception:
-            pass
+
+        threading.Thread(target=_shutdown_server, name="acp-shutdown", daemon=True).start()
 
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT, _shutdown)
