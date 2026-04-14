@@ -140,4 +140,4 @@ curl -s -X POST http://127.0.0.1:8765/flows/phenotype_validation_review \
   --data-binary @./sandbox/phenotype_validation_payload.json | python -m json.tool
 ```
 
-4) You can change the row number above to create a new profile and rerun phenotype_validation_review
+4) Change the row number above to select a different review row, then rerun `phenotype_validation_review`.

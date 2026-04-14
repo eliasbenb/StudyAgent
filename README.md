@@ -1,175 +1,120 @@
-# OHDSI Study Design Assistant (in development)
+# OHDSI Study Design Assistant
 
-## Announcements
-- 03/28/2026 : this stack is now containerized - see `Docker quickstart` below.
+This repository is building an agent-style interface for common OHDSI study design tasks. The current implementation is strongest in two areas:
 
-## Overview
+- phenotype recommendation for target and outcome cohort selection
+- Keeper-assisted concept generation, profile extraction, and row adjudication for phenotype validation
 
-The goal OHDSI Study Design Assistant (SDA) is to provide an experience similar to working with a coding agent but for designing and executing observational retrospective studies using OHDSI tools. SDA is designed to organize and enable users to interact with a wide variety of agentic tools to suppor their study work.  It does so by providing a clean separation between the agentic user experience and the generative AI tools. Check out the tag `first_agent_and_strategus` for the first version to assist with Strategus (not validated) as shown in the [more recent video for the second version](https://pitt.hosted.panopto.com/Panopto/Pages/Viewer.aspx?id=34ed8cfe-2e4c-40b7-9efa-b40800b75bd5) (no sound). This demonstrates a possible way for the agent to help the user design, run, and interpret the results of an OHDSI incidence rate analysis using the [CohortIncidenceModule](https://raw.githubusercontent.com/OHDSI/Strategus/main/inst/doc/CreatingAnalysisSpecification.pdf) of  [OHDSI Strategus](https://github.com/OHDSI/Strategus). This older [ video](https://pitt.hosted.panopto.com/Panopto/Pages/Viewer.aspx?id=f802b01f-9bce-4f38-a4c4-b3f800e6ebdd&start=254) shows an prior test of this concept.
- 
-#### Want to contribute? 
+The project separates orchestration from deterministic tooling:
 
-Here are some ways:
-- Create a fork of the project, branch the new project's main branch, edit the README.md and do a pull request back this main branch. Your changes could be integrated very quickly that way!
-- Join the [discussion on the OHDSI Forums](https://forums.ohdsi.org/t/seeking-input-on-services-that-the-ohdsi-study-agent-will-provide/24890)
-- Attend the Generative AI WG monthly calls (currently 2nd Tuesdays of the month at 12 Eastern) or reach out directly to Rich Boyce on the OHDSI Teams or the OHDSI forums.
-- You may also post "question" issues on this repo.
+- `acp_agent/`: ACP server that exposes the flow endpoints and handles LLM orchestration
+- `mcp_server/`: MCP server that exposes retrieval, prompt, vocabulary, and Keeper tools
+- `core/`: pure validation and business logic shared by ACP and MCP
+- `R/OHDSIAssistant/`: R-side shell for the Strategus incidence workflow
 
-### Roadmap
+## What Problems This Solves
 
-### Near term
+Researchers often have three immediate bottlenecks when designing an OHDSI study:
 
-- `data_quality_interpretation` : study agent provides interpretation from Data Quality Dashboard, Achilles Heel data quality checks, and Achilles data source characterizations over one or more sources that a user intends to use within a study.  In this mode, the study agent derive insights from those sources based on the user's study intent.  This is important because it will make the information in the characterizations and QC reports more relevant and actionable to users than static and broad-scope reports (current state). Users will use this tool from R initially.
+- finding a reasonable starting phenotype definition for a study intent
+- refining or validating that phenotype before using it in downstream analyses
+- moving from phenotype selection into a reproducible study workflow
 
-- `create_new_phenotype_definition` : Study agent will guide the user through the creation of a definition for an EHR phenotype for the target or outcome cohort relevant to their study intent. This workflow involves selection of concepts, organization of concepts into concept sets, and assembly into cohort definition logic. In addition to concept retrieval, the agent will support reasoning over the semantic relationships encoded in the OMOP vocabulary system (via identity, hierarchical, compositional, associative and attribute links) to help users identify appropriate inclusions, exclusions, and boundary conditions. This enables deterministic validation of constructed concept sets, supports principled disambiguation of similar concepts during grounding, and provides traceable justification for why specific concepts or groups are included in a phenotype definition. Users will use this tool from R or Atlas initially.
-  
-- `keeper_design_sample` : Study agent helps the user to create the createKeeper function to pull cases matching a clinical definition. This will guide the user through building the set of symptoms, related differential diagnoses (those that need to be ruled out), diagnostic procedures, complications, exposures, and measurements for the clinical definition. 
+This repo addresses those bottlenecks by combining:
 
-### Long term
+- phenotype retrieval from an indexed phenotype library
+- constrained LLM ranking or critique with deterministic validation
+- Keeper-oriented tooling for concept generation, OMOP profile extraction, and row-level adjudication using sanitized summaries only
+- an R shell that turns selected cohorts into a reproducible Strategus incidence workflow
 
-Build out the entire set of planned services, each one evaluated and user-tested.
+At no point should raw row-level patient data be sent directly to an LLM.
 
-## Design 
+## What Is Usable Now
 
-- An [Agent Client Protocol](https://agentclientprotocol.com/get-started/introduction) (ACP) server that owns interaction policy: confirmations, safe summaries, and tool invocation routing.
-   - `acp_agent/`: interaction policy + routing; calls MCP tools or falls back to core.
-   
-- Multiple MCP servers that own tool contracts: JSON schemas + deterministic tool outputs.
-   - `mcp_server/`: exposes tool APIs (core tools plus phenotype retrieval and prompt bundles).
+### 1. Phenotype Recommendation
 
-- Core logic stays pure and reusable across both ACP and MCP layers.
-   - `core/`: pure, deterministic business logic (no IO, no network).
+Implemented flow:
 
-### Why this architecture matters
+1. Retrieve phenotype candidates with MCP `phenotype_search`
+2. Build the prompt and schema with MCP `phenotype_prompt_bundle`
+3. Rank candidates with an OpenAI-compatible LLM
+4. Validate and filter results in `core`
+5. Return diagnostics and explicit fallback metadata if the LLM output is unusable
 
-ACP provides consistent UX and control across environments (R, Atlas/WebAPI, notebooks), while MCP provides a shared tool bus that can be reused across agents and institutions. ACP orchestrates tool calls and LLM calls; MCP owns retrieval, prompt assets, and deterministic tool outputs. This enables the same core tools can be accessed via MCP or directly by ACP without coupling to datasets or local files.
+Related implemented flows:
 
-NOTE: at no time for any of the services should an LLM see row-level data (this can be accomplished through the careful use of protocols (MCP for tooling, Agent Client Protocol for OHDSI tool <-> LLM communication) and a security layer). 
+- `phenotype_recommendation`
+- `phenotype_recommendation_advice`
+- `phenotype_improvements`
+- `phenotype_intent_split`
+- `concept_sets_review`
+- `cohort_critique_general_design`
 
+This same recommendation path is already wired into the R Strategus incidence shell for target/outcome selection.
 
-## What is implemented so far?
+Primary references:
 
-### Current unit tests 
+- [docs/PHENOTYPE_RECOMMENDATION_DESIGN.md](/ai-agent/HadesProject/OHDSI-Study-Agent/docs/PHENOTYPE_RECOMMENDATION_DESIGN.md)
+- [docs/STRATEGUS_SHELL.md](/ai-agent/HadesProject/OHDSI-Study-Agent/docs/STRATEGUS_SHELL.md)
+- [docs/INCIDENCE_WORKFLOW.md](/ai-agent/HadesProject/OHDSI-Study-Agent/docs/INCIDENCE_WORKFLOW.md)
 
-See `docs/TESTING.md` for install and CLI smoke tests.
+### 2. Keeper-Assisted Phenotype Validation
 
-### `phenotype_recommendation` flow (ACP + MCP + LLM)
+This is the other strong implemented story. It covers concept generation through case-review input preparation and row adjudication.
 
-1. ACP calls MCP `phenotype_search` to retrieve candidates.
-2. ACP calls MCP `phenotype_prompt_bundle` to fetch prompt assets and output schema.
-3. ACP calls an OpenAI-compatible LLM API to rank candidates.
-4. Core validates and filters LLM output.
+Implemented workflow:
 
-The flow now returns explicit LLM diagnostics and fallback metadata. When ACP falls back to deterministic core behavior, the response includes `llm_used`, `llm_status`, `fallback_reason`, `fallback_mode`, and a small `diagnostics` object instead of silently degrading.
+1. Generate Keeper-oriented concept sets with `keeper_concept_sets_generate`
+2. Extract OMOP-backed Keeper profiles with `keeper_profiles_generate`
+3. Convert those profiles into review rows
+4. Sanitize each row before any LLM call
+5. Run `phenotype_validation_review` to adjudicate a single review row as `yes`, `no`, or `unknown`
 
-For details on the design, see `docs/PHENOTYPE_RECOMMENDATION_DESIGN.md`.
+Current characteristics:
 
-### `phenotype_improvements` flow (ACP + MCP + LLM)
+- concept generation can use Hecate-backed, generic-search, or DB-backed vocabulary tooling
+- profile extraction is deterministic only and does not call an LLM
+- downstream adjudication is constrained by fail-closed sanitization and a small label set
 
-1. ACP calls MCP `phenotype_prompt_bundle` for improvement prompts.
-2. ACP calls an OpenAI-compatible LLM API for improvement suggestions.
-3. ACP calls MCP `phenotype_improvements` with LLM output for validation.
+Primary references:
 
-This flow reviews one phenotype definition at a time. If multiple cohorts are provided, ACP uses the first.
+- [docs/KEEPER_INTERFACE_SPEC.md](/ai-agent/HadesProject/OHDSI-Study-Agent/docs/KEEPER_INTERFACE_SPEC.md)
+- [docs/PHENOTYPE_VALIDATION_REVIEW.md](/ai-agent/HadesProject/OHDSI-Study-Agent/docs/PHENOTYPE_VALIDATION_REVIEW.md)
+- [docs/TESTING.md](/ai-agent/HadesProject/OHDSI-Study-Agent/docs/TESTING.md)
 
-### `concept-sets-review` flow (ACP + MCP + LLM)
+## End-To-End Workflows
 
-1. ACP calls MCP `lint_prompt_bundle` for lint prompts.
-2. ACP calls an OpenAI-compatible LLM API for findings/patches/actions.
-3. ACP calls MCP `propose_concept_set_diff` with LLM output for validation.
+### Workflow A: Go from study intent to suggested phenotypes
 
-### `cohort-critique-general-design` flow (ACP + MCP + LLM)
+Use this when you need a defensible starting cohort definition for a target or outcome.
 
-1. ACP calls MCP `phenotype_prompt_bundle` for cohort critique prompts.
-2. ACP calls an OpenAI-compatible LLM API for findings/patches.
-3. ACP calls MCP `cohort_lint` with LLM output for validation.
+1. Start MCP and ACP
+2. Call `phenotype_recommendation` with a study intent
+3. Review returned candidates and diagnostics
+4. If needed, call `phenotype_recommendation_advice` for next-step guidance
+5. Optionally call `phenotype_improvements` on a selected cohort
+6. If you are working in R, continue through `runStrategusIncidenceShell()`
 
-### `phenotype_validation_review` flow (ACP + MCP + LLM)
+### Workflow B: Go from clinical event to keeper-assisted validation review
 
-1. ACP calls MCP `keeper_sanitize_row` to remove PHI/PII (fail-closed).
-2. ACP calls MCP `keeper_prompt_bundle` and `keeper_build_prompt` for a sanitized patient prompt.
-3. ACP calls an OpenAI-compatible LLM API to review the patient summary.
-4. ACP calls MCP `keeper_parse_response` to normalize the label.
+Use this when you need a practical validation loop around a phenotype.
 
-LLM requests never include row-level PHI/PII; only sanitized summaries are sent.
+1. Call `keeper_concept_sets_generate` for the phenotype of interest
+2. Approve the concept sets you want to use for extraction
+3. Call `keeper_profiles_generate` against your OMOP data
+4. Take one generated `rows[]` entry at a time
+5. Send the sanitized row to `phenotype_validation_review`
+6. Repeat row adjudication as needed to review more sampled cases
 
-For details on PHI/PII handling, see `docs/PHENOTYPE_VALIDATION_REVIEW.md`.
+## Quickstart
 
-### `keeper_concept_sets_generate` flow (ACP + MCP + LLM)
+### Install
 
-1. ACP calls MCP `keeper_concept_set_bundle` to fetch domain prompts and schemas.
-2. ACP calls an OpenAI-compatible LLM API to generate seed terms per Keeper domain.
-3. ACP calls MCP vocabulary tools to search, normalize, and prune candidate concepts.
-4. ACP calls the LLM again to filter candidates, then returns normalized concept sets plus diagnostics.
-
-This flow does not use patient-level data.
-It currently supports:
-- Hecate-backed vocabulary search and Phoebe expansion
-- air-gapped `generic_search_api` vocabulary search
-- DB-backed concept enrichment/filtering and DB-backed Phoebe recommendations via `concept_recommended`
-
-### `keeper_profiles_generate` flow (ACP + MCP, deterministic only)
-
-1. ACP calls MCP `keeper_profile_extract` to query OMOP CDM using approved Keeper concept sets.
-2. MCP builds Keeper-style long-form profile records with no LLM involvement.
-3. ACP calls MCP `keeper_profile_to_rows` to convert those records into review rows.
-
-This flow does not call the LLM and is the bridge between approved concept sets and
-sanitized `phenotype_validation_review`.
-
-### `phenotype_recommendation_advice` flow (ACP + MCP + LLM)
-
-1. ACP calls MCP `phenotype_recommendation_advice` for advisory prompt assets and schema.
-2. ACP calls an OpenAI-compatible LLM API to return actionable guidance.
-3. Core validates the advisory output.
-
-This flow is used as a fallback when users do not accept initial recommendations.
-
-### Strategus incidence shell (R)
-
-The interactive Strategus shell orchestrates phenotype selection, improvements, and script
-generation for a CohortIncidence study. See `docs/STRATEGUS_SHELL.md`.
-
-### Service Registry
-
-Service definitions live in `docs/SERVICE_REGISTRY.yaml`. ACP exposes a `/services` endpoint that
-reports registry entries plus any additional ACP-implemented services. You can list services
-quickly with `doit list_services`.
-
-#### Example run for `phenotype_recommendation`
-
-*Prerequisite:* you have embedded phenotype definitions - see `./docs/PHENOTYPE_INDEXING.md`
-
-1. Start the ACP server (runs on http://127.0.0.1:8765/ by default):
 ```bash
-export LLM_API_KEY=<YOUR KEY>
-export LLM_API_URL="<URL BASE>/api/chat/completions"
-export LLM_LOG=1
-export LLM_MODEL=<a model that supports completions> 
-export EMBED_API_KEY=<YOUR KEY>
-export EMBED_MODEL=<a text embedding model>
-export EMBED_URL="<URL BASE>/v1/embeddings"
-export PHENOTYPE_INDEX_DIR="<ABSOLUTE PATH TO phenotype_index>"
-export STUDY_AGENT_MCP_CWD="<REPO ROOT (optional, for stable relative paths)>"
-export STUDY_AGENT_LOG_DIR="/tmp/study-agent-logs"
-export ACP_LOG_LEVEL=DEBUG
-export MCP_LOG_LEVEL=DEBUG
-export STUDY_AGENT_HOST=127.0.0.1
-export STUDY_AGENT_PORT=8765
-export STUDY_AGENT_MCP_COMMAND=study-agent-mcp
-export STUDY_AGENT_MCP_ARGS=""
-study-agent-acp
+pip install -e .
 ```
-Built-in rotating log files will be created in `STUDY_AGENT_LOG_DIR` as `study-agent-acp.log` and `study-agent-mcp.log`.
-Note: This starts MCP via stdio. If you use MCP over HTTP, do not set `STUDY_AGENT_MCP_COMMAND`.
-Note: Prefer stopping the ACP process (SIGINT/SIGTERM) so the MCP subprocess is closed cleanly. Killing the MCP directly can leave defunct processes.
-Note: ACP uses a threaded HTTP server by default. Set `STUDY_AGENT_THREADING=0` to disable threading.
-Note: `/health` includes MCP preflight details under `mcp_index` when MCP is configured.
-Troubleshooting: run `python mcp_server/scripts/mcp_probe.py` to verify index paths and search without ACP.
 
-### MCP over HTTP (recommended for cross-platform stability)
-
-Start MCP as a separate HTTP service:
+### Start MCP over HTTP
 
 ```bash
 export MCP_TRANSPORT=http
@@ -179,175 +124,53 @@ export MCP_PATH=/mcp
 study-agent-mcp
 ```
 
-Then point ACP at it:
+### Start ACP
 
 ```bash
 export STUDY_AGENT_MCP_URL="http://127.0.0.1:8790/mcp"
-study-agent-acp
-```
-Note: `STUDY_AGENT_MCP_URL` must include the port (e.g. `:8790`). When set, ACP uses HTTP and ignores `STUDY_AGENT_MCP_COMMAND`.
-
-PowerShell (Windows) quickstart:
-
-```powershell
-$env:MCP_TRANSPORT = "http"
-$env:MCP_HOST = "127.0.0.1"
-$env:MCP_PORT = "8790"
-$env:MCP_PATH = "/mcp"
-study-agent-mcp
-```
-
-```powershell
-$env:STUDY_AGENT_MCP_URL = "http://127.0.0.1:8790/mcp"
+export STUDY_AGENT_HOST=127.0.0.1
+export STUDY_AGENT_PORT=8765
 study-agent-acp
 ```
 
-2. Run `phenotype_recommendation`
+If you want LLM-backed phenotype flows, also set an OpenAI-compatible endpoint:
+
+```bash
+export LLM_API_KEY=<YOUR_KEY>
+export LLM_API_URL="<URL_BASE>/api/chat/completions"
+export LLM_MODEL=<MODEL_NAME>
+```
+
+This has been tested with [Open webui](https://docs.openwebui.com/), with locally hosted models, and [LLM Shim](https://github.com/dbmi-pitt/llm-shim) with access to cloud services (tested with openai and bedrock models) and an embedding model serviced using the HugginFace Text Embedding Interface service. 
+
+If you want phenotype retrieval, you also need an indexed phenotype library. See [docs/PHENOTYPE_INDEXING.md](/ai-agent/HadesProject/OHDSI-Study-Agent/docs/PHENOTYPE_INDEXING.md).
+
+
+## Minimal Examples
+
+### Phenotype recommendation
+
 ```bash
 curl -s -X POST http://127.0.0.1:8765/flows/phenotype_recommendation \
   -H 'Content-Type: application/json' \
-  -d '{"study_intent":"Identify clinical risk factors for older adult patients who experience an adverse event of acute gastro-intenstinal (GI) bleeding", "top_k":20, "max_results":10,"candidate_limit":10}'
+  -d '{"study_intent":"Identify clinical risk factors for older adult patients who experience an adverse event of acute gastrointestinal bleeding","top_k":20,"max_results":10,"candidate_limit":10}'
 ```
 
-Run `keeper_concept_sets_generate`
+### Keeper concept generation
+
 ```bash
 curl -s -X POST http://127.0.0.1:8765/flows/keeper_concept_sets_generate \
   -H 'Content-Type: application/json' \
-  -d '{"phenotype":"Gastrointestinal bleeding","domain_keys":["doi","alternativeDiagnosis","symptoms"],"candidate_limit":10,"include_diagnostics":true}'
+  -d '{"phenotype":"Gastrointestinal bleeding",
+       "domain_keys":["doi","alternativeDiagnosis","symptoms"],
+       "candidate_limit":5,
+       "include_diagnostics":true
+       }'
 ```
 
-Provider-specific examples for Hecate-backed and air-gapped setups are in [docs/TESTING.md](/ai-agent/HadesProject/OHDSI-Study-Agent/docs/TESTING.md). If you change provider-related environment variables or update MCP/ACP code, restart both processes before retesting.
-
-For provider-specific testing notes and MCP tool examples, see [docs/TESTING.md](/ai-agent/HadesProject/OHDSI-Study-Agent/docs/TESTING.md).
-
-### Docker quickstart
-
-Use Docker compose to run MCP and ACP together with MCP over HTTP.
-
-NOTE: If you plan to use phenotype services, you will need to phenotype index (see `./docs/PHENOTYPE_INDEXING.md`) with output to  `data/phenotype_index/`
-
-1. Prepare environment variables:
+### Keeper row adjudication
 
 ```bash
-cp .env.example .env
-```
-
-Recommended contents of `.env`:
-```
-EMBED_API_KEY=<your api key>
-EMBED_MODEL=<an embedding model>
-EMBED_URL=http://172.17.0.1:3000/ollama/api/embed  # or equivalent
-EMBED_TIMEOUT=120
-LLM_API_KEY=<your api key>
-LLM_API_URL=http://172.17.0.1:3000/api/chat/completions # or equivalent
-LLM_MODEL=<a chat completion model>
-LLM_LOG=1 
-LLM_USE_RESPONSES=0
-LLM_TIMEOUT=300
-STUDY_AGENT_MCP_TIMEOUT=240
-ACP_TIMEOUT=360
-LLM_CANDIDATE_LIMIT=5
-LLM_RECOMMENDATION_TOP_K=20
-LLM_RECOMMENDATION_MAX_RESULTS=3
-STUDY_AGENT_ALLOW_CORE_FALLBACK=0
-STUDY_AGENT_DEBUG=1
-```
-
-2. Build and start both services:
-
-```bash
-sudo docker compose up --build -d  # you might not need sudo depending on your docker set up
-```
-
-3. Check service health and tool listing:
-
-```bash
-curl -s http://127.0.0.1:8765/health | python -m json.tool
-```
-
-Expected output:
-```
-{
-    "status": "ok",
-    "mcp": {
-        "ok": true,
-        "mode": "http"
-    },
-    "mcp_index": {
-        "skipped": true
-    }
-}
-```
-
-This should show a number of services with an empty warnings list
-```bash
-curl -s http://127.0.0.1:8765/services | python -m json.tool
-```
-
-Notes:
-- ACP is exposed on port 8765 and MCP on port 8790.
-- The phenotype index is mounted from `./data/phenotype_index` into MCP at `/data/phenotype_index`.
-
-### Constrained deployment guidance
-
-Recommended timeout ladder:
-
-- `ACP_TIMEOUT=360`
-- `LLM_TIMEOUT=300`
-- `STUDY_AGENT_MCP_TIMEOUT=240`
-- `EMBED_TIMEOUT=120` to `180`
-
-Recommendation tuning knobs:
-
-- `LLM_USE_RESPONSES=0` is the default and the recommended setting when `LLM_API_URL` points at `/api/chat/completions`.
-- `LLM_CANDIDATE_LIMIT=5` trims recommendation prompts before the LLM call.
-- `LLM_RECOMMENDATION_TOP_K=20` controls retrieval breadth before truncation.
-- `LLM_RECOMMENDATION_MAX_RESULTS=3` keeps early recommendation outputs small and easier to parse.
-
-Recommendation responses now include explicit fallback metadata and diagnostics. Example parse-failure fallback:
-
-```json
-{
-  "status": "ok",
-  "llm_used": false,
-  "llm_status": "json_parse_failed",
-  "fallback_reason": "llm_json_parse_failed",
-  "fallback_mode": "stub",
-  "candidate_limit": 5,
-  "candidate_count": 5,
-  "diagnostics": {
-    "llm_status": "json_parse_failed",
-    "llm_duration_seconds": 12.5,
-    "llm_error": "json_parse_failed",
-    "llm_parse_stage": "chat_completions_content:json_loads",
-    "llm_schema_valid": false
-  }
-}
-```
-
-You can also derive environment-specific timeout starting values with:
-
-```bash
-doit calibrate_timeouts
-```
-
-The calibration task samples the main structured phenotype flows, compares multiple candidate limits, and writes both a recommended timeout `.env` fragment and a JSON timing report.
-
-Detailed tests can be found in `docs/TESTING.md` but this one is useful for a quick check that a tool that uses the chat completion is functioning reachable:
-```
-# phenotype_intent_split
-curl -s -X POST http://127.0.0.1:8765/flows/phenotype_intent_split \
-  -H 'Content-Type: application/json' \
-  -d '{"study_intent":"Identify clinical risk factors for older adult patients who experience an adverse event of acute gastro-intenstinal (GI) bleeding"}'
-```
-
-...expected output something like
-```
-{"status": "ok", "llm_used": true, "intent_split": {"plan": "The target cohort identifies the initial group of patients, and the outcome cohort defines the adverse event of interest to be tracked over time in this cohort.", "target_statement": "Patients aged 65 years and older who have a record of admission to a hospital.", "outcome_statement": "Patients aged 65 years and older who have a record of acute gastrointestinal (GI) bleeding.", "rationale": "This split defines the cohort of older adults at risk of GI bleeding (target) and identifies the specific adverse event we will be tracking in this population (outcome).", "questions": ["What are the specific definitions of 'acute GI bleeding' and 'hospital admission' within the study?", "Are there specific GI conditions that should be included or excluded from the outcome cohort (e.g., ulcers, diverticulitis)?", "What is the desired timeframe for the follow-up period after the index date?"], "mode": "llm"}}%
-```
-
-Another example, this one examining safe harbor patient data to determinee if a GI bleed occurred:
-```
 curl -s -X POST http://127.0.0.1:8765/flows/phenotype_validation_review \
   -H 'Content-Type: application/json' \
   -d '{
@@ -358,138 +181,49 @@ curl -s -X POST http://127.0.0.1:8765/flows/phenotype_validation_review \
       "visitContext": "Inpatient Visit",
       "presentation": "Gastrointestinal hemorrhage",
       "priorDisease": "Peptic ulcer",
-      "symptoms": "",
-      "comorbidities": "",
       "priorDrugs": "celecoxib",
-      "priorTreatmentProcedures": "",
-      "diagnosticProcedures": "",
-      "measurements": "",
-      "alternativeDiagnosis": "",
-      "afterDisease": "",
-      "afterDrugs": "Naproxen",
-      "afterTreatmentProcedures": ""
+      "afterDrugs": "naproxen"
     }
   }'
 ```
 
-...expected result something like: 
-```
-{"status": "ok", "tool": "keeper_parse_response", "warnings": [], "safe_summary": {"plan": null}, "full_result": {"label": "yes", "rationale": "The patient's diagnosis recorded on the day of the visit is 'Gastrointestinal hemorrhage', which directly indicates the presence of GI bleeding. This is sufficient evidence to confirm the presence of the phenotype.", "_meta": {"tool": "keeper_parse_response"}}, "llm_used": true}
-```
+## Where To Go Next
 
-## Planned Services
+- Installation, smoke tests, and provider-specific examples: [docs/TESTING.md](/ai-agent/HadesProject/OHDSI-Study-Agent/docs/TESTING.md)
+- Implemented service inventory: [docs/SERVICE_REGISTRY.yaml](/ai-agent/HadesProject/OHDSI-Study-Agent/docs/SERVICE_REGISTRY.yaml)
+- Docker setup: see `compose.yaml` and `.env.example`
+- ACP and MCP component details: [acp_agent/README.md](/ai-agent/HadesProject/OHDSI-Study-Agent/acp_agent/README.md), [mcp_server/README.md](/ai-agent/HadesProject/OHDSI-Study-Agent/mcp_server/README.md)
 
-Below is a set of planned study agent services, organized by category. For each service, document the input, output, and validation approach.
+## Contributing
 
-### High Level Conceptual
+- Open an issue or discussion if a workflow is unclear or under-documented
+- Submit PRs that tighten the implemented workflow docs before adding new service claims
+- Join the discussion on the [OHDSI Forums](https://forums.ohdsi.org/t/seeking-input-on-services-that-the-ohdsi-study-agent-will-provide/24890)
 
-#### `protocol_generator`
-**Input:** PICO/TAR for a study intent.  
-**Output:** Templated protocol.  
-**Validation:** Protocol completeness and consistency review.
+## Roadmap
 
-#### `background_writer`
-**Input:** PICO/TAR and hypothesis.  
-**Output:** Background document justifying the study (systematic research summary).  
-**Validation:** Source coverage and alignment with hypothesis.
+Near-term priorities:
 
-#### `protocol_critique`
-**Input:** Protocol.  
-**Output:** Critique reviewing required components and consistency.  
-**Validation:** Checklist of required components; coherence checks.
+- strengthen phenotype recommendation and improvement workflows for study design and Strategus handoff
+- expand Keeper-assisted concept generation and profile-review workflows for phenotype validation
+- improve researcher-facing workflow documentation, smoke tests, and deployment guidance
 
-#### `dag_create`
-**Input:** Protocol or study intent statement.  
-**Output:** Directed acyclic graph of known causal/associative relations (LLM + literature discovery).  
-**Validation:** Consistency with cited relations and domain plausibility.
+Active expansion areas:
 
-#### `explain_cohort_diagnostics`
-**Input:** The user's study intent statement and cohort diagnostics output including code to run and the results files  
-**Output:** narrative summary / report of the analysis.  
-**Validation:** Correctly reported summary of the methods and results.
+- data-quality interpretation tied to study intent
+- more phenotype authoring support beyond recommendation and improvement
+- broader study-design critique and cohort authoring services
 
-#### `explain_incidence/estimation/characterization_results`
-**Input:** The user's study intent statement and cohort diagnostics and a completed analysis with strategus output folders with code to run and the results files (incidence/estimation/characterization).  
-**Output:** narrative summary / report of the analysis.  
-**Validation:** Correctly reported summary of the methods and results.
+For the broader future-service catalog, see [docs/ROADMAP.md](/ai-agent/HadesProject/OHDSI-Study-Agent/docs/ROADMAP.md).
 
-### High Level Operational
+## What Remains Experimental
 
-#### `strategus_*`
-**Input:** Study specification intent or existing Strategus JSON.  
-**Output:** Composed/compared/edited/criticized/debugged Strategus JSON.  
-**Validation:** Schema validation and diff review.
+The repository still contains broader plans that are not the main implemented story yet. Treat these as exploratory or partial unless the docs for a specific flow say otherwise:
 
-### Search and Suggest
+- generalized protocol-writing and critique services
+- broader data-quality interpretation services
+- wider cohort authoring and design-review service families beyond the currently implemented lint/recommendation paths
+- expansion toward a larger study-agent service catalog
 
-#### `phenotype_recommendations`
-**Input:** Study intent.  
-**Output:** Suggested phenotypes with cohort definition artifacts for user-accepted selections.  
-**Validation:** Allowed-id filtering; user confirmation before writes.
+The planned-service inventory in older docs should not be read as "fully available now".
 
-#### `phenotype_improvements` (or `phenotype fit`)
-**Input:** Selected phenotypes + study intent.  
-**Output:** Improved cohort definitions or Atlas records for accepted changes.  
-**Validation:** Target cohort ID validation; user confirmation before writes.
-
-#### `concept_set_recommendations`
-**Input:** Phenotype/covariate intent lacking a cohort definition.  
-**Output:** Suggested concept sets and created concept set artifacts if accepted.  
-**Validation:** Concept set schema validation; user confirmation before writes.
-
-#### `propose_negative_control_outcomes`
-**Input:** Target (optionally comparator).  
-**Output:** Recommended negative control outcomes with cohort definitions if accepted.  
-**Validation:** Clinical plausibility check; user confirmation before writes.
-
-#### `propose_comparator`
-**Input:** Target.  
-**Output:** Proposed comparator cohort definition if accepted (optionally using OHDSI Comparator Selector).  
-**Validation:** Comparator appropriateness review; user confirmation before writes.
-
-#### `propose_adjustment_set`
-**Input:** Study intent + DAG.  
-**Output:** Adjustment set from OHDSI features plus suggested FeatureExtraction features.  
-**Validation:** Confounder/collider/mediator checks against DAG. E.g., showing the user if any known and biased collider that *someone in another paper published* might accidentally be including in their study design. See [this JAMA article](https://jamanetwork.com/journals/jama/fullarticle/2790247) for more about colliders. Also, potentially using a knowledge graph of causal findings from the entire literature to informat the user of the same.  
-
-### Study Component Testing, Improvement, and Linting
-
-#### `propose_concept_set_diff`
-**Input:** Concept set + study intent.  
-**Output:** Proposed patches to concept set artifacts if accepted.  
-**Validation:** Deterministic diff rules; user confirmation before writes.
-
-#### `phenotype_characterize`
-**Input:** Selected phenotype(s).  
-**Output:** R code (or Atlas services) to characterize populations.  
-**Validation:** Execution preview; user confirmation before running.
-
-#### `phenotype_data_quality_review`
-**Input:** Phenotype definitions + data quality sources (DQD, Achilles Heel, characterization).  
-**Output:** Mitigations and patches for accepted issues.  
-**Validation:** Issue traceability to data quality sources; user confirmation before writes.
-
-#### `phenotype_dataset_profiler`
-**Input:** Phenotype definition(s) + datasets.  
-**Output:** R code to run (e.g., Cohort Diagnostics) and a brief summary of drivers of cohort size variation.  
-**Validation:** Reproducible execution outputs; summary tied to diagnostics.
-
-#### `phenotype_validation_review`
-**Input:** Selected phenotype definition (usually for an outcome cohort) and a narrative clinical description with differential diagnoses and known associated factors for validation and to compare to known phenotype performance.  
-**Output:** code to extract sample cases based on the clinical description and LLM-assessment of a sample (user-specified or random) of cohort records stripped of PHI. 
-**Validation:** Sampling logic review; user confirmation.
-
-#### `cohort_definition_build`
-**Input:** Phenotype/covariate intent without a cohort definition.  
-**Output:** Capr code for cohort definition.  
-**Validation:** Schema validation; user confirmation before writes.
-
-#### `cohort_definition_lint`
-**Input:** Cohort JSON.  
-**Output:** Proposed patches for design issues and execution efficiency.  
-**Validation:** Deterministic lint rules; user confirmation before writes.
-
-#### `review_negative_control`
-**Input:** Target + outcome.  
-**Output:** Judgement on causal implausibility with explanation and citations.  
-**Validation:** Citation review and domain plausibility.
