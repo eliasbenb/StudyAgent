@@ -5,6 +5,10 @@ This repository is building an agent-style interface for common OHDSI study desi
 - phenotype recommendation for target and outcome cohort selection
 - Keeper-assisted concept generation, profile extraction, and row adjudication for phenotype validation
 
+
+[![Watch the video]()](https://pitt.hosted.panopto.com/Panopto/Pages/Viewer.aspx?id=eaaf0e5f-d60f-4b9a-a521-b42c016b1af3)
+
+
 The project separates orchestration from deterministic tooling:
 
 - `acp_agent/`: ACP server that exposes the flow endpoints and handles LLM orchestration
